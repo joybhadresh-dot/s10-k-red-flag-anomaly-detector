@@ -12,21 +12,35 @@ RED_FLAGS = [
     "breach of covenant", "unregistered sales", "insider trading", "resignation of auditor"
 ]
 
-def extract_pdf_pages(uploaded_file):
-    """Reads a PDF and returns a list of dictionaries with page numbers and text."""
-    pdf_reader = PyPDF2.PdfReader(uploaded_file)
+def process_uploaded_file(uploaded_file):
+    """Dynamically reads PDFs page-by-page or standard files as a single text block."""
     pages_data = []
+    file_name = uploaded_file.name.lower()
     
-    for i, page in enumerate(pdf_reader.pages):
-        text = page.extract_text()
-        if text:
-            # Clean up extra spaces/newlines for better searching
-            clean_text = " ".join(text.split())
-            pages_data.append({"page_num": i + 1, "text": clean_text})
-            
+    try:
+        # Handle PDFs
+        if file_name.endswith('.pdf'):
+            pdf_reader = PyPDF2.PdfReader(uploaded_file)
+            for i, page in enumerate(pdf_reader.pages):
+                text = page.extract_text()
+                if text:
+                    clean_text = " ".join(text.split())
+                    pages_data.append({"page_num": i + 1, "text": clean_text})
+                    
+        # Handle TXT, CSV, MD, or any other file type by decoding as raw text
+        else:
+            text = uploaded_file.read().decode("utf-8")
+            if text:
+                clean_text = " ".join(text.split())
+                # Assign all text to "Page 1" for compatibility with the UI
+                pages_data.append({"page_num": 1, "text": clean_text})
+                
+    except Exception as e:
+        st.error(f"Error processing file. Please ensure it is a valid text or PDF document. Details: {e}")
+        
     return pages_data
 
-def analyze_pdf_pages(pages_data, custom_query=""):
+def analyze_document(pages_data, custom_query=""):
     results = {
         "keywords": {},
         "custom_query_snippets": [],
@@ -62,7 +76,7 @@ def analyze_pdf_pages(pages_data, custom_query=""):
                 results["custom_query_snippets"].append({"page": page_num, "snippet": snippet})
                 
     # 3. Aggregate Sentiment and Readability on the full document
-    if results["full_text"]:
+    if results["full_text"].strip():
         blob = TextBlob(results["full_text"])
         results["sentiment"] = blob.sentiment.polarity
         results["fog_index"] = textstat.gunning_fog(results["full_text"])
@@ -77,7 +91,6 @@ def analyze_pdf_pages(pages_data, custom_query=""):
 # ==========================================
 st.set_page_config(page_title="10-K Red Flag Detector", page_icon="🚩", layout="wide")
 
-# Custom CSS to make metrics and expanders look sharper
 st.markdown("""
     <style>
     .stMetric { background-color: #f0f2f6; padding: 15px; border-radius: 8px; }
@@ -91,7 +104,9 @@ st.markdown("""
 with st.sidebar:
     st.title("⚙️ Control Panel")
     st.write("Upload a corporate disclosure to scan for statutory and operational risks.")
-    uploaded_file = st.file_uploader("Upload 10-K Document (PDF)", type="pdf")
+    
+    # Removed the 'type' restriction to accept all files
+    uploaded_file = st.file_uploader("Upload Document (PDF, TXT, etc.)")
     
     st.divider()
     st.write("### Targeted Search")
@@ -103,17 +118,16 @@ with st.sidebar:
 st.title("SEC 10-K Red Flag Anomaly Detector 🚩")
 
 if uploaded_file is None:
-    st.info("👈 Please upload a PDF document in the sidebar to begin the analysis.")
+    st.info("👈 Please upload a document in the sidebar to begin the analysis.")
 else:
-    with st.spinner("Extracting pages and analyzing corporate disclosures..."):
-        pages_data = extract_pdf_pages(uploaded_file)
+    with st.spinner("Extracting and analyzing document..."):
+        pages_data = process_uploaded_file(uploaded_file)
         
         if not pages_data:
-            st.error("Could not extract text from this PDF. It may be a scanned image.")
+            st.error("Could not extract readable text from this file. It may be empty or an unsupported format (like a JPEG).")
         else:
-            results = analyze_pdf_pages(pages_data, custom_query)
+            results = analyze_document(pages_data, custom_query)
             
-            # Create interactive tabs for a clean, fresh UI
             tab1, tab2, tab3 = st.tabs(["📊 Executive Summary", "🚨 Risk Keywords (Red Flags)", "🎯 Custom Query Results"])
             
             # --- TAB 1: SUMMARY ---
@@ -122,6 +136,7 @@ else:
                 col1, col2, col3 = st.columns(3)
                 
                 with col1:
+                    # If it's a text file, it will show as 1 page. If PDF, it shows total pages.
                     st.metric(label="Total Pages Scanned", value=len(pages_data))
                 
                 with col2:
@@ -149,11 +164,10 @@ else:
             # --- TAB 2: RED FLAGS ---
             with tab2:
                 st.write("### Detected Risk Factors")
-                st.write("Click on any detected category to see the exact context and **Page Number**.")
+                st.write("Click on any detected category to see the exact context.")
                 
                 if results["keywords"]:
                     for kw, matches in results["keywords"].items():
-                        # The expander now acts as the clickable UI element
                         with st.expander(f"⚠️ **{kw.title()}** (Found {len(matches)} time(s))"):
                             for i, match in enumerate(matches):
                                 st.markdown(f"📍 **Page {match['page']}**")
@@ -179,4 +193,3 @@ else:
                         st.warning(f"No occurrences found for '{custom_query}'.")
                 else:
                     st.info("Enter a custom query in the sidebar to search the document.")
-                
